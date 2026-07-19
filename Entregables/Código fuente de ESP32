@@ -1,0 +1,158 @@
+//// segunda version
+//..............
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "D HTesp.h"
+
+// ==========================
+// PINES
+// ==========================
+const int DHT_PIN = 14;
+const int RELE_VENTILADOR = 13;
+const int BUZZER_PIN = 4;
+const int GAS_PIN = 34;
+const int LDR_PIN = 32;
+const int LED_VERDE = 18;
+const int LED_ROJO = 19;
+
+// ==========================
+// LCD + DHT
+// ==========================
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+DHTesp dhtSensor;
+
+// ==========================
+// UMBRALES
+// ==========================
+const float TEMPERATURA_MAXIMA = 25.0;
+const int LIMITE_GAS_CRITICO = 2500;
+const int UMBRAL_OSCURIDAD = 1500;
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(RELE_VENTILADOR, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(LED_VERDE, OUTPUT);
+  pinMode(LED_ROJO, OUTPUT);
+
+  // Arreglado: Inicia en HIGH para que el relé inverso empiece APAGADO
+  digitalWrite(RELE_VENTILADOR, HIGH);
+
+  pinMode(GAS_PIN, INPUT);
+  pinMode(LDR_PIN, INPUT);
+
+  dhtSensor.setup(DHT_PIN, DHTesp::DHT22);
+
+  lcd.init();
+  lcd.backlight();
+
+  lcd.setCursor(0, 0);
+  lcd.print("   UNFV FIIS    ");
+  lcd.setCursor(0, 1);
+  lcd.print("CONTROL AMBIENT");
+
+  digitalWrite(LED_VERDE, HIGH);
+  digitalWrite(LED_ROJO, HIGH);
+  delay(2000);
+
+  digitalWrite(LED_VERDE, LOW);
+  digitalWrite(LED_ROJO, LOW);
+
+  lcd.clear();
+}
+
+void loop() {
+
+  TempAndHumidity data = dhtSensor.getTempAndHumidity();
+  int nivelGas = analogRead(GAS_PIN);
+  int nivelLuz = analogRead(LDR_PIN);
+
+  bool emergenciaActiva = (nivelGas > LIMITE_GAS_CRITICO);
+
+  // ==========================
+  // MODO EMERGENCIA
+  // ==========================
+  if (emergenciaActiva) {
+
+    tone(BUZZER_PIN, 1000);
+    digitalWrite(LED_ROJO, HIGH);
+    digitalWrite(LED_VERDE, LOW);
+    
+    // Arreglado: Envía LOW para ENCENDER el extractor en relé inverso
+    digitalWrite(RELE_VENTILADOR, LOW); 
+
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("!ALERTA CRITICA!");
+    lcd.setCursor(0, 1);
+    lcd.print("EVACUAR ALMACEN");
+
+  }
+
+  // ==========================
+  // MODO NORMAL
+  // ==========================
+  else {
+
+    noTone(BUZZER_PIN);
+    digitalWrite(LED_VERDE, HIGH);
+    digitalWrite(LED_ROJO, LOW);
+
+    // Arreglado: Lógica de temperatura para relé inverso
+    if (data.temperature > TEMPERATURA_MAXIMA) {
+      digitalWrite(RELE_VENTILADOR, LOW);  // LOW enciende el ventilador
+    } else {
+      digitalWrite(RELE_VENTILADOR, HIGH); // HIGH apaga el ventilador
+    }
+
+    // ---- LCD LINEA 1 ----
+    lcd.setCursor(0, 0);
+    lcd.print("                "); // Limpia línea 1
+    lcd.setCursor(0, 0);
+    lcd.print("T:");
+    lcd.print(data.temperature, 1);
+    lcd.print("C H:");
+    lcd.print(data.humidity, 1);
+    lcd.print("%");
+
+    // ---- LCD LINEA 2 ----
+    lcd.setCursor(0, 1);
+    lcd.print("                "); // Limpia línea 2
+    lcd.setCursor(0, 1);
+
+    // Arreglado: Signo < para calibración correcta del LDR físico
+    if (nivelLuz < UMBRAL_OSCURIDAD) {
+      lcd.print("G:");
+      lcd.print(nivelGas);
+      lcd.print(" L:OSC");
+    } else {
+      lcd.print("G:");
+      lcd.print(nivelGas);
+      lcd.print(" L:LUZ");
+    }
+
+    // ---- ESTADO VENTILADOR EN LCD ----
+    // Arreglado: Muestra [FN] cuando el pin está en LOW (encendido real)
+    lcd.setCursor(12, 1); 
+    if (digitalRead(RELE_VENTILADOR) == LOW) {
+      lcd.print("[FN]");
+    } else {
+      lcd.print("[..]");
+    }
+  }
+
+  // ==========================
+  // SERIAL
+  // ==========================
+  Serial.print("T:");
+  Serial.print(data.temperature);
+  Serial.print(",H:");
+  Serial.print(data.humidity);
+  Serial.print(",G:");
+  Serial.print(nivelGas);
+  Serial.print(",L:");
+  Serial.println(nivelLuz);
+
+  delay(5000);
+}
