@@ -1,0 +1,188 @@
+//// PRIMERA VERSION
+//////
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "DHTesp.h"
+
+#include <ESP32Servo.h> // Librería para el servo simulado
+
+// ==========================================
+// DEFINICIÓN DE PINES (Hardware)
+// ==========================================
+const int DHT_PIN = 15;
+const int RELE_VENTILADOR = 2; // Controla el sistema de refrigeración
+const int BUZZER_PIN = 4;      // Alarma sonora
+const int GAS_PIN = 34;        // Entrada analógica para Gas/Nivel
+const int LDR_PIN = 32;        // Entrada analógica para Sensor de Luz
+const int LED_VERDE = 18;      // Estado: Sistema Seguro
+const int LED_ROJO = 19;       // Estado: Alerta Crítica
+
+////////////
+
+const int SERVO_PIN = 13;
+
+// Inicialización de componentes y librerías
+LiquidCrystal_I2C lcd(0x27, 16, 2);
+DHTesp dhtSensor;
+////////////////////
+
+Servo miVentilador; // Objeto del servo
+
+// ==========================================
+// UMBRALES DE CONTROL INDUSTRIAL (Setpoints)
+// ==========================================
+const float TEMPERATURA_MAXIMA = 28.0; // Umbral para encender refrigeración
+const int LIMITE_GAS_CRITICO = 2500;   // Umbral de peligro ambiental
+const int UMBRAL_OSCURIDAD = 1500;     // Umbral para detectar eficiencia de luz
+
+
+//////////////-----------------------
+int anguloServo = 0;
+///////////////////////--------------
+
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Configuración de pines de Salida (Actuadores e Indicadores)
+  pinMode(RELE_VENTILADOR, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(LED_VERDE, OUTPUT);
+  pinMode(LED_ROJO, OUTPUT);
+  
+  digitalWrite(RELE_VENTILADOR, LOW); // <--(Empieza apagado)
+
+  // Configuración de pines de Entrada (Sensores)
+  pinMode(GAS_PIN, INPUT);
+  pinMode(LDR_PIN, INPUT);
+  
+  ////////////////////////////////////////-----------
+  miVentilador.attach(SERVO_PIN, 500, 2400); 
+  miVentilador.write(0);                     
+  /////////////////////////////////////////----
+
+  // Inicialización de periféricos
+  dhtSensor.setup(DHT_PIN, DHTesp::DHT22);
+  lcd.init();
+  lcd.backlight();
+  
+  // Pantalla de Bienvenida Institucional
+  lcd.setCursor(0, 0);
+  lcd.print("   UNFV FIIS   ");
+  lcd.setCursor(0, 1);
+  lcd.print("CONTROL AMBIENT");
+  digitalWrite(LED_VERDE, HIGH); // Parpadeo de prueba inicial
+  digitalWrite(LED_ROJO, HIGH);
+  delay(2000);
+  digitalWrite(LED_VERDE, LOW);
+  digitalWrite(LED_ROJO, LOW);
+  lcd.clear();
+}
+
+void loop() {
+  // ==========================================
+  // FASE 1: ADQUISICIÓN DE DATOS (Entradas)
+  // ==========================================
+  TempAndHumidity data = dhtSensor.getTempAndHumidity();
+  int nivelGas = analogRead(GAS_PIN);
+  int nivelLuz = analogRead(LDR_PIN); // Lee la iluminación (0 = mucha luz, 4095 = oscuridad)
+
+  // Variable de control para saber si hay una emergencia general
+  bool emergenciaActiva = false;
+
+  // ==========================================
+  // FASE 2: LÓGICA DE CONTROL (Procesamiento)
+  // ==========================================
+  
+  // Evaluar Emergencia Máxima por Gas/Contaminación
+  if (nivelGas > LIMITE_GAS_CRITICO) {
+    emergenciaActiva = true;
+  }
+
+  // ==========================================
+  // FASE 3: ACCIÓN DE ACTUADORES Y SALIDAS
+  // ==========================================
+  
+  if (emergenciaActiva) {
+    // ---- MODO CRÍTICO ----
+    tone(BUZZER_PIN, 1000);        // Alarma sonora intermitente simulada
+    digitalWrite(LED_ROJO, HIGH);  // Encender luz de peligro
+    digitalWrite(LED_VERDE, LOW);  // Apagar luz de seguridad
+    digitalWrite(RELE_VENTILADOR, HIGH); // Extracción forzada al máximo
+
+    // Mensaje de Emergencia en Pantalla
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("!ALERTA CRITICA!");
+    lcd.setCursor(0, 1);
+    lcd.print("EVACUAR ALMACEN ");
+    
+  } else {
+    // ---- MODO NORMAL / SEGURO ----
+    noTone(BUZZER_PIN);
+    digitalWrite(LED_VERDE, HIGH); // Sistema operativo seguro
+    digitalWrite(LED_ROJO, LOW);
+
+    // Control Inteligente de Refrigeración (Por temperatura)
+    if (data.temperature > TEMPERATURA_MAXIMA) {
+      digitalWrite(RELE_VENTILADOR, HIGH); // Enciende ventilador/extractor
+    } else {
+      digitalWrite(RELE_VENTILADOR, LOW);  // Apaga ventilador
+    }
+
+    // Visualización de datos en tiempo real en la pantalla LCD
+    lcd.setCursor(0, 0);
+    lcd.print("T:" + String(data.temperature, 1) + "C H:" + String(data.humidity, 1) + "%");
+    
+    // Alternar visualización en la fila 2 para mostrar Luz y Gas de forma elegante
+    lcd.setCursor(0, 1);
+    if (nivelLuz > UMBRAL_OSCURIDAD) {
+      lcd.print("G:" + String(nivelGas) + " L:OSCURO ");
+    } else {
+      lcd.print("G:" + String(nivelGas) + " L:LUZ OK ");
+    }
+    
+    // Estado del Extractor reflejado en la LCD
+    lcd.setCursor(12, 1);
+    if (digitalRead(RELE_VENTILADOR) == HIGH) {
+      lcd.print("[FN]");
+    } else {
+      lcd.print("[..]");
+    }
+  }
+
+  //-----por borrar------------------------
+  moverVentiladorSimulado(emergenciaActiva, data.temperature);
+  //-----por borrar-----------------------
+
+  // ==========================================
+  // FASE 4: TELEMETRÍA (Para las Gráficas de Logística)
+  // ==========================================
+  Serial.print("Temperatura:");
+  Serial.print(data.temperature);
+  Serial.print(",Humedad:");
+  Serial.print(data.humidity);
+  Serial.print(",Nivel_Gases:");
+  Serial.print(nivelGas);
+  Serial.print(",Nivel_Luminosidad:");
+  Serial.println(nivelLuz);
+
+  delay(2000); // Muestreo estabilizado cada 2 segundos
+}
+
+
+//-----------------
+void moverVentiladorSimulado(bool emergencia, float tempActual) {
+  if (emergencia) {
+    miVentilador.write(180); // Si hay gas, se queda al máximo
+  } 
+  else if (tempActual > TEMPERATURA_MAXIMA) {
+    // Si hace calor, oscila de un lado a otro como un ventilador real
+    if (anguloServo == 0) anguloServo = 180;
+    else anguloServo = 0;
+    miVentilador.write(anguloServo);
+  } 
+  else {
+    miVentilador.write(0); // Si todo está frío, se apaga
+  }
+}
